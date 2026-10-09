@@ -703,11 +703,16 @@ class Platform:
         default_block_size: int,
         vllm_config: "VllmConfig",
     ) -> int:
-        """Smallest block size every backend accepts.
+        """Block size every backend accepts, honoring backend preferences.
 
         ``supports_block_size`` may be overridden to accept exact sizes only
         (CPU_MLA takes 16 and no multiple of it), so candidates are the LCMs of
         one supported size per backend, each checked against every backend.
+
+        When every backend accepts the default, each backend's
+        ``get_preferred_block_size`` is consulted and the smallest preferred
+        size every backend accepts is returned; the default is returned only
+        when no preferred size is shared.
 
         Raises:
             ValueError: If the backends share no supported block size.
@@ -721,6 +726,20 @@ class Platform:
             if len(backend_classes) == 1:
                 return backend_classes[0].get_preferred_block_size(default_block_size)
             if all(b.supports_block_size(default_block_size) for b in backend_classes):
+                # Consult each backend's preference instead of blindly taking
+                # the default: e.g. HPUAttentionBackendV1 sizes its KV cache
+                # for its preferred 128 and fails if selection lands on 16.
+                # Take the smallest preferred size every backend accepts and
+                # fall back to the default only when no preference is shared.
+                preferred_sizes = sorted(
+                    {
+                        b.get_preferred_block_size(default_block_size)
+                        for b in backend_classes
+                    }
+                )
+                for preferred in preferred_sizes:
+                    if all(b.supports_block_size(preferred) for b in backend_classes):
+                        return preferred
                 return default_block_size
             # A backend declaring no sizes accepts any, so it contributes 1.
             per_backend_sizes = [

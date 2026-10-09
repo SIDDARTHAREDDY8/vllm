@@ -486,6 +486,42 @@ def test_preferred_block_size_rejects_backends_with_no_common_size():
         Platform._preferred_block_size_for_backends(classes, 16, None)
 
 
+def _mock_backend_with_preferred(supported: list, preferred: int):
+    """Backend with an explicit block-size preference, like
+    HPUAttentionBackendV1 (supports 16 but prefers 128)."""
+    cls = _mock_backend(supported)
+
+    @classmethod
+    def get_preferred_block_size(cls_, default_block_size: int) -> int:
+        return preferred
+
+    cls.get_preferred_block_size = get_preferred_block_size
+    return cls
+
+
+def test_preferred_block_size_consults_preferences_for_multiple_backends():
+    # Llama-4 on HPU keeps two backends (full attention + chunked-local
+    # subclass), each supporting 16 but preferring 128. Selection must land
+    # on 128, the size the HPU runner already snapshotted — not the
+    # default 16.
+    classes = [
+        _mock_backend_with_preferred([16, 128, 528, 768], preferred=128),
+        _mock_backend_with_preferred([16, 128, 528, 768], preferred=128),
+    ]
+    assert Platform._preferred_block_size_for_backends(classes, 16, None) == 128
+
+
+def test_preferred_block_size_falls_back_to_default_without_shared_preference():
+    # One backend prefers 128 but its sibling accepts only 16: 128 is not
+    # shared, so the default 16 is returned.
+    preferring = _mock_backend_with_preferred([16, 128], preferred=128)
+    exact = _mock_backend([16], exact=True)
+    assert (
+        Platform._preferred_block_size_for_backends([preferring, exact], 16, None)
+        == 16
+    )
+
+
 @pytest.mark.parametrize("cpu", [False, True])
 def test_alignment_rejected_by_a_sibling_backend_raises(monkeypatch, cpu):
     # Alignment that lands on a size an exact-size sibling rejects must fail
