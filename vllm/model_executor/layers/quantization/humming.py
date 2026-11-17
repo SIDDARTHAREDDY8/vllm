@@ -414,6 +414,13 @@ class HummingLinearMethod(LinearMethodBase):
                         if name != "bias":
                             delattr(layer, name)
                     self.__class__ = UnquantizedLinearMethod  # type: ignore
+                    # Run the constructor so the swapped-in method is fully
+                    # initialized: __init__ sets _gemm_impl, which
+                    # process_weights_after_loading and apply both read.
+                    # Without this, every fallen-back layer crashes at load
+                    # with "'UnquantizedLinearMethod' object has no
+                    # attribute '_gemm_impl'" (vllm-project/vllm#68194).
+                    UnquantizedLinearMethod.__init__(self)
                     tensor = torch.empty(
                         (
                             layer.output_partition_sizes_sum,
